@@ -1,0 +1,766 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  SAM version of 609-Automating-Forensic-Disk-Collection. 
+  Self-contained, can be installed in any number of regions.
+
+Parameters:
+  ORGID:
+    Type: String
+    Default: o-0000000000
+    Description: AWS Organizations ID to Allow use of KMS key
+  ArtifactBucketName:
+    Type: String
+    Default: acme-inc-forensic-artifacts
+    Description: Base name for the regional S3 bucket used to store forensic artifacts (region will be added)
+  ForensicsAMI:
+    Type: String
+    Default: ami-000000000000
+    Description: AMI identifier for forensics image
+
+  AllowInvokeFromAccountId:
+    Type: String
+    Default: ''
+    Description:
+      To allow the DiskForensicsInvoke function to be called explicitly from another account, enter its
+      12-digit account number here. Otherwise, leave this parameter empty.
+
+  TerminateRogueAfterInitialSnapshot:
+    Type: String
+    AllowedValues: ['Yes', 'No']
+    Default: 'Yes'
+    Description:
+      Select Yes to terminate the rogue server after the initial snapshot has been captured.
+      Select No to leave it running.
+
+  VPCCIDR:
+    Type: String
+    Default: 172.16.0.0/16
+    Description: Default VPC CIDR
+  AZ1Letter:
+    Type: String
+    Default: a
+    Description: Default AZ1 letter indicator (region will be used as a prefix)
+  AZ1CIDR:
+    Type: String
+    Default: 172.16.20.0/20
+    Description: Default AZ1 CIDR
+  AZ2Letter:
+    Type: String
+    Default: b
+    Description: Default AZ2 letter indicator (region will be used as a prefix)
+  AZ2CIDR:
+    Type: String
+    Default: 172.16.32.0/20
+    Description: Default AZ2 CIDR
+
+  MemberAutomationRole:
+    Type: String
+    Default: IR-Automation-Member-Role
+    Description: Base name of the member Automation Role (region will be added).
+      Do not change this parameter - it is used by an IAM Role with a hardcoded
+      name in diskMember.yaml.
+  ForensicAuditLogGroupName:
+    Type: String
+    Default: ForensicDiskAudit
+    Description: Name for the CloudWatch Log Group used for Forensic Audit Logs
+  ForensicReadinessLogGroupName:
+    Type: String
+    Default: ForensicDiskReadiness
+    Description: Name for the CloudWatch Log Group used for Forensic Readiness Logs
+  ForensicCaptureLogGroupName:
+    Type: String
+    Default: ForensicDiskCapture
+    Description: Name for the CloudWatch Log Group used for Forensic Capture Logs
+  EC2ForensicRole:
+    Type: String
+    Default: EC2ForensicsCollectionRole
+    Description: Base name of the EC2 instance profile (region will be added)
+  ForensicStepFunctionLogGroupName:
+    Type: String
+    Default: ForensicStepFunctionLogs
+    Description: Name for the CloudWatch Log Group used for Forensic Step Function Workflow
+
+Globals:
+  Function:
+    Runtime: python3.8
+    Handler: lambda_function.lambda_handler
+    MemorySize: 128
+    Timeout: 15
+    Architectures:
+      - x86_64
+
+Conditions:
+  AllowInvokeFromAccountIdBlank: !Equals
+    - !Ref AllowInvokeFromAccountId
+    - ''
+  CreateExternalPermissions: !Not
+    - !Condition AllowInvokeFromAccountIdBlank
+
+Resources:
+  ############################################################################
+  #
+  # forensicsResources
+  #
+  ############################################################################
+
+  forensicsVPC:
+    Type: 'AWS::EC2::VPC'
+    Properties:
+      CidrBlock: !Ref VPCCIDR
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: ForensicsVPC
+
+  forensicsSubnet1:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      AvailabilityZone: !Sub '${AWS::Region}${AZ1Letter}'
+      CidrBlock: !Ref AZ1CIDR
+      VpcId: !Ref forensicsVPC
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: ForensicsSubnet1
+
+  forensicsSubnet2:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      AvailabilityZone: !Sub '${AWS::Region}${AZ2Letter}'
+      CidrBlock: !Ref AZ2CIDR
+      VpcId: !Ref forensicsVPC
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: ForensicsSubnet2
+
+  forensicsRT:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref forensicsVPC
+      Tags:
+        - Key: Name
+          Value: ForensicsRouteTable
+
+  forensicsSubnet1RTAttach:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      SubnetId: !Ref forensicsSubnet1
+      RouteTableId: !Ref forensicsRT
+
+  forensicsSubnet2RTAttach:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      SubnetId: !Ref forensicsSubnet2
+      RouteTableId: !Ref forensicsRT
+
+  S3Endpoint:
+    Type: 'AWS::EC2::VPCEndpoint'
+    Properties:
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.s3'
+      VpcId: !Ref forensicsVPC
+      RouteTableIds:
+        - !Ref forensicsRT
+
+  LogsServiceSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: Allow https to client host
+      VpcId: !Ref forensicsVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: LogsInterfaceEndpointSG
+
+  LogsEndpoint:
+    Type: 'AWS::EC2::VPCEndpoint'
+    Properties:
+      SecurityGroupIds:
+        - !Ref LogsServiceSecurityGroup
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.logs'
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !Ref forensicsSubnet1
+        - !Ref forensicsSubnet2
+      VpcEndpointType: Interface
+      VpcId: !Ref forensicsVPC
+
+  ForensicsCaptureSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: Allow output to S3 and Logs to client host
+      VpcId: !Ref forensicsVPC
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          Description: Allow Outbound access
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: ForensicsInstanceSG
+
+  ForensicEncryptionKey:
+    Type: 'AWS::KMS::Key'
+    Properties:
+      Description: KMS Key for Forensic capture and automation
+      Enabled: true
+      PendingWindowInDays: 7
+      KeyPolicy:
+        Version: 2012-10-17
+        Id: key-default-1
+        Statement:
+          - Sid: Enable IAM User Permissions
+            Effect: Allow
+            Principal:
+              AWS: !Join
+                - ''
+                - - 'arn:aws:iam::'
+                  - !Ref 'AWS::AccountId'
+                  - ':root'
+            Action: 'kms:*'
+            Resource: '*'
+          - Sid: Allow use of the key and attachment of persistent resources
+            Effect: Allow
+            Principal:
+              AWS: '*'
+            Action:
+              - 'kms:Encrypt'
+              - 'kms:ReEncrypt*'
+              - 'kms:GenerateDataKey*'
+              - 'kms:DescribeKey'
+            Resource: '*'
+            Condition:
+              StringEquals:
+                'aws:PrincipalOrgID': !Ref ORGID
+          - Sid: Allow attachment of persistent resources
+            Effect: Allow
+            Principal:
+              AWS: '*'
+            Action:
+              - 'kms:CreateGrant'
+              - 'kms:ListGrants'
+              - 'kms:RevokeGrant'
+            Resource: '*'
+            Condition:
+              Bool:
+                'kms:GrantIsForAWSResource': 'true'
+              StringEquals:
+                'aws:PrincipalOrgID': !Ref ORGID
+
+  ForensicKeyAlias:
+    Type: 'AWS::KMS::Alias'
+    Properties:
+      AliasName: alias/ForensicEncryptionKey
+      TargetKeyId: !Ref ForensicEncryptionKey
+
+  ForensicArtifactBucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              KMSMasterKeyID: !Ref ForensicEncryptionKey
+              SSEAlgorithm: 'aws:kms'
+      BucketName: !Sub '${ArtifactBucketName}-${AWS::Region}'
+      VersioningConfiguration:
+        Status: Enabled
+
+  ForensicAuditLogGroup:
+    Type: 'AWS::Logs::LogGroup'
+    Properties:
+      LogGroupName: !Ref ForensicAuditLogGroupName
+
+  ForensicCaptureLogGroup:
+    Type: 'AWS::Logs::LogGroup'
+    Properties:
+      LogGroupName: !Ref ForensicCaptureLogGroupName
+
+  ForensicReadinessLogGroup:
+    Type: 'AWS::Logs::LogGroup'
+    Properties:
+      LogGroupName: !Ref ForensicReadinessLogGroupName
+
+  EC2ForensicsCollectionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          Effect: Allow
+          Principal:
+            Service:
+              - ec2.amazonaws.com
+          Action: 'sts:AssumeRole'
+      Description: Role to provide access for EC2 to write forensic artifacts
+      RoleName: !Sub '${EC2ForensicRole}_${AWS::Region}'
+
+  EC2ForensicsCollectionPolicy:
+    Type: 'AWS::IAM::ManagedPolicy'
+    Properties:
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: KMSPermissions
+            Effect: Allow
+            Action:
+              - 'kms:Decrypt'
+              - 'kms:DescribeKey'
+              - 'kms:GenerateDataKey'
+            Resource: !GetAtt
+              - ForensicEncryptionKey
+              - Arn
+          - Sid: LogsPermissions
+            Effect: Allow
+            Action:
+              - 'logs:CreateLogStream'
+              - 'logs:DescribeLogGroups'
+              - 'logs:DescribeLogStreams'
+              - 'logs:PutLogEvents'
+            Resource: '*'
+          - Sid: S3Permissions
+            Effect: Allow
+            Action: 's3:PutObject'
+            Resource: !Sub '${ForensicArtifactBucket.Arn}/*'
+      ManagedPolicyName: !Sub 'EC2ForensicsCollectionPolicy_${AWS::Region}'
+      Roles:
+        - !Ref EC2ForensicsCollectionRole
+
+  EC2ForensicsCollectionInstanceProfile:
+    Type: 'AWS::IAM::InstanceProfile'
+    Properties:
+      InstanceProfileName: !Sub '${EC2ForensicRole}_${AWS::Region}'
+      Roles:
+        - !Ref EC2ForensicsCollectionRole
+
+  ############################################################################
+  #
+  # diskFunctions
+  #
+  ############################################################################
+
+  DiskForensicAutomationRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          Effect: Allow
+          Principal:
+            Service:
+              - lambda.amazonaws.com
+          Action: 'sts:AssumeRole'
+      Description: >-
+        Disk Forensic Automation Role to provide access for Lambda to invoke
+        disk collection functions
+      RoleName: !Sub 'DiskForensicAutomationRole_${AWS::Region}' # Important that this name is explicit
+
+  DiskForensicAutomationPolicy:
+    Type: 'AWS::IAM::ManagedPolicy'
+    Properties:
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: EC2Permissions
+            Effect: Allow
+            Action:
+              - 'ec2:AttachVolume'
+              - 'ec2:CopySnapshot'
+              - 'ec2:CreateTags'
+              - 'ec2:CreateVolume'
+              - 'ec2:DescribeSnapshots'
+              - 'ec2:DescribeSubnets'
+              - 'ec2:RunInstances'
+            Resource: '*'
+          - Sid: KMSPermissions
+            Effect: Allow
+            Action:
+              - 'kms:CreateGrant'
+              - 'kms:Decrypt'
+              - 'kms:DescribeKey'
+              - 'kms:Encrypt'
+              - 'kms:GenerateDataKey*'
+              - 'kms:ReEncrypt*'
+            Resource: !GetAtt ForensicEncryptionKey.Arn
+          - Sid: LogsPermissions
+            Effect: Allow
+            Action:
+              - 'logs:CreateLogGroup'
+              - 'logs:CreateLogStream'
+              - 'logs:DescribeLogGroups'
+              - 'logs:DescribeLogStreams'
+              - 'logs:GetLogEvents'
+              - 'logs:PutLogEvents'
+            Resource: '*'
+          - Sid: IAMPermissions
+            Effect: Allow
+            Action:
+              - 'iam:PassRole'
+            Resource: !GetAtt EC2ForensicsCollectionRole.Arn
+          - Sid: S3Permissions
+            Effect: Allow
+            Action:
+              - 's3:PutObject'
+            Resource: !Sub '${ForensicArtifactBucket.Arn}/*'
+          - Sid: STSPermissions
+            Effect: Allow
+            Action: 'sts:AssumeRole'
+            Resource: !Sub 'arn:aws:iam::*:role/${MemberAutomationRole}_${AWS::Region}'
+      ManagedPolicyName: !Sub 'DiskForensicAutomationPolicy_${AWS::Region}'
+      Roles:
+        - !Ref DiskForensicAutomationRole
+
+  CreateSnapshotLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions/CreateSnapshot/
+      Description: Create Snapshot Function
+      Role: !GetAtt DiskForensicAutomationRole.Arn
+      Timeout: 180
+      Environment:
+        Variables:
+          EVIDENCE_BUCKET: !Sub '${ArtifactBucketName}-${AWS::Region}'
+          LOG_GROUP: !Ref ForensicAuditLogGroupName
+          ROLE_NAME: !Sub '${MemberAutomationRole}_${AWS::Region}'
+
+  CheckSnapshotLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions/CheckSnapshot/
+      Description: Check Snapshot Function
+      Role: !GetAtt DiskForensicAutomationRole.Arn
+      Timeout: 15
+      Environment:
+        Variables:
+          ROLE_NAME: !Sub '${MemberAutomationRole}_${AWS::Region}'
+
+  CopySnapshotLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions/CopySnapshot/
+      Description: Copy Snapshot Function
+      Role: !GetAtt DiskForensicAutomationRole.Arn
+      Timeout: 180
+      Environment:
+        Variables:
+          ROLE_NAME: !Sub '${MemberAutomationRole}_${AWS::Region}'
+          KMS_KEY: !GetAtt ForensicEncryptionKey.Arn
+
+  CheckCopySnapshotLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions/CheckCopySnapshot/
+      Description: Check Copy Snapshot Function
+      Role: !GetAtt DiskForensicAutomationRole.Arn
+      Timeout: 15
+      Environment:
+        Variables:
+          ROLE_NAME: !Sub '${MemberAutomationRole}_${AWS::Region}'
+
+  ShareSnapshotLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions/ShareSnapshot/
+      Description: Share Snapshot Function
+      Role: !GetAtt DiskForensicAutomationRole.Arn
+      Timeout: 15
+      Environment:
+        Variables:
+          ROLE_NAME: !Sub '${MemberAutomationRole}_${AWS::Region}'
+          SECURITY_ACCOUNT: !Ref 'AWS::AccountId'
+
+  FinalCopySnapshotLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions/FinalCopySnapshot/
+      Description: Final Copy Snapshot Function
+      Role: !GetAtt DiskForensicAutomationRole.Arn
+      Timeout: 15
+      Environment:
+        Variables:
+          KMS_KEY: !GetAtt ForensicEncryptionKey.Arn
+
+  FinalCheckSnapshotLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions/FinalCheckSnapshot/
+      Description: Final Check Snapshot Function
+      Role: !GetAtt DiskForensicAutomationRole.Arn
+      Timeout: 15
+
+  CreateVolumeLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions/CreateVolume/
+      Description: Create Volume Function
+      Role: !GetAtt DiskForensicAutomationRole.Arn
+      Timeout: 15
+      Environment:
+        Variables:
+          KMS_KEY: !GetAtt ForensicEncryptionKey.Arn
+          SUPPORTED_AZS: !Sub '["${AWS::Region}${AZ1Letter}","${AWS::Region}${AZ2Letter}"]'
+
+  RunInstancesLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions/RunInstances/
+      Description: Run Instances Function
+      Role: !GetAtt DiskForensicAutomationRole.Arn
+      Timeout: 60
+      Environment:
+        Variables:
+          AMI_ID: !Ref ForensicsAMI
+          INSTANCE_PROFILE_NAME: !Sub '${EC2ForensicRole}_${AWS::Region}'
+          SECURITY_GROUP: !GetAtt ForensicsCaptureSecurityGroup.GroupId
+          VPC_ID: !Ref forensicsVPC
+
+  MountVolumeLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions/MountVolume/
+      Description: Mount Volume Function
+      Role: !GetAtt DiskForensicAutomationRole.Arn
+      Timeout: 60
+      Environment:
+        Variables:
+          LOG_GROUP: !Ref ForensicAuditLogGroupName
+
+  TerminateInstanceLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions/TerminateInstance/
+      Description: Terminate an instance
+      Role: !GetAtt DiskForensicAutomationRole.Arn
+      Timeout: 60
+      Environment:
+        Variables:
+          ROLE_NAME: !Sub '${MemberAutomationRole}_${AWS::Region}'
+
+  ############################################################################
+  #
+  # diskStepFunction
+  #
+  ############################################################################
+
+  DiskForensicStepFunction:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      DefinitionUri: statemachine/disk_forensics.asl.yaml
+      DefinitionSubstitutions:
+        CreateSnapshotLambdaArn: !GetAtt CreateSnapshotLambda.Arn
+        CheckSnapshotLambdaArn: !GetAtt CheckSnapshotLambda.Arn
+        CopySnapshotLambdaArn: !GetAtt CopySnapshotLambda.Arn
+        CheckCopySnapshotLambdaArn: !GetAtt CheckCopySnapshotLambda.Arn
+        ShareSnapshotLambdaArn: !GetAtt ShareSnapshotLambda.Arn
+        FinalCopySnapshotLambdaArn: !GetAtt FinalCopySnapshotLambda.Arn
+        FinalCheckSnapshotLambdaArn: !GetAtt FinalCheckSnapshotLambda.Arn
+        CreateVolumeLambdaArn: !GetAtt CreateVolumeLambda.Arn
+        RunInstancesLambdaArn: !GetAtt RunInstancesLambda.Arn
+        MountVolumeLambdaArn: !GetAtt MountVolumeLambda.Arn
+        TerminateInstanceLambdaArn: !GetAtt TerminateInstanceLambda.Arn
+        DiskForensicsSNSTopicArn: !Ref DiskForensicsSNSTopic
+        TerminateRogueAfterInitialSnapshot: !Ref TerminateRogueAfterInitialSnapshot
+      Policies:
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - 'xray:PutTraceSegments'
+                - 'xray:PutTelemetryRecords'
+                - 'xray:GetSamplingRules'
+                - 'xray:GetSamplingTargets'
+              Resource:
+                - '*'
+
+            - Effect: Allow
+              Action:
+                - 'logs:CreateLogDelivery'
+                - 'logs:GetLogDelivery'
+                - 'logs:UpdateLogDelivery'
+                - 'logs:DeleteLogDelivery'
+                - 'logs:ListLogDeliveries'
+                - 'logs:PutResourcePolicy'
+                - 'logs:DescribeResourcePolicies'
+                - 'logs:DescribeLogGroups'
+              Resource: '*'
+
+        - LambdaInvokePolicy:
+            FunctionName: !Ref CreateSnapshotLambda
+        - LambdaInvokePolicy:
+            FunctionName: !Ref CheckSnapshotLambda
+        - LambdaInvokePolicy:
+            FunctionName: !Ref CopySnapshotLambda
+        - LambdaInvokePolicy:
+            FunctionName: !Ref CheckCopySnapshotLambda
+        - LambdaInvokePolicy:
+            FunctionName: !Ref ShareSnapshotLambda
+        - LambdaInvokePolicy:
+            FunctionName: !Ref FinalCopySnapshotLambda
+        - LambdaInvokePolicy:
+            FunctionName: !Ref FinalCheckSnapshotLambda
+        - LambdaInvokePolicy:
+            FunctionName: !Ref CreateVolumeLambda
+        - LambdaInvokePolicy:
+            FunctionName: !Ref RunInstancesLambda
+        - LambdaInvokePolicy:
+            FunctionName: !Ref MountVolumeLambda
+        - LambdaInvokePolicy:
+            FunctionName: !Ref TerminateInstanceLambda
+
+        - SNSPublishMessagePolicy:
+            TopicName: !GetAtt DiskForensicsSNSTopic.TopicName
+
+      Logging:
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !GetAtt ForensicStepFunctionLogGroup.Arn
+        IncludeExecutionData: true
+        Level: ALL
+
+  ForensicStepFunctionLogGroup:
+    Type: 'AWS::Logs::LogGroup'
+    Properties:
+      LogGroupName: !Ref ForensicStepFunctionLogGroupName
+
+  DiskForensicsSNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: 'Disk Forensics Error Topic'
+      TopicName: 'DiskForensicsErrorTopic'
+      KmsMasterKeyId: alias/aws/sns
+
+  ############################################################################
+  #
+  # diskForensicsInvoke
+  #
+  ############################################################################
+
+  DiskForensicsInvoke:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: Lambda used to Invoke Forensic Step Function
+      Handler: index.lambda_handler # The "index" module name required for Zip
+      Events:
+        GuardDutyTriggerRule:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source:
+                - 'aws.securityhub'
+              detail-type:
+                - 'REMOVETHISTOENABLESecurity Hub Findings - Imported'
+              detail:
+                findings:
+                  ProductFields:
+                    aws/securityhub/SeverityLabel:
+                      - 'CRITICAL'
+                      - 'HIGH'
+                      - 'MEDIUM'
+                    aws/securityhub/ProductName:
+                      - 'GuardDuty'
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - states:StartExecution
+              Resource:
+                - !Ref DiskForensicStepFunction
+            - Sid: LogsPermissions
+              Effect: Allow
+              Action:
+                - 'logs:CreateLogGroup'
+                - 'logs:CreateLogStream'
+                - 'logs:DescribeLogGroups'
+                - 'logs:DescribeLogStreams'
+                - 'logs:GetLogEvents'
+                - 'logs:PutLogEvents'
+              Resource: '*'
+      FunctionName: DiskForensicsInvoke
+      Timeout: 15
+      Environment:
+        Variables:
+          ForensicSFNARN: !Ref DiskForensicStepFunction
+      InlineCode: |
+        #  Copyright 2017 Amazon Web Services, Inc. or its affiliates. All Rights Reserved.
+        #  This file is licensed to you under the AWS Customer Agreement (the "License").
+        #  You may not use this file except in compliance with the License.
+        #  A copy of the License is located at http://aws.amazon.com/agreement/ .
+        #  This file is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, express or implied.
+        #  See the License for the specific language governing permissions and limitations under the License.
+
+        import json
+        import os
+        import boto3
+        import time
+
+        sfnArn = os.environ['ForensicSFNARN']
+
+        def buildEvent(event):
+            triggeredEvent = {}
+            triggeredEvent['AwsAccountId'] = event['AwsAccountId']
+            triggeredEvent['Types'] = event['Types']
+            triggeredEvent['FirstObservedAt'] = event['FirstObservedAt']
+            triggeredEvent['LastObservedAt'] = event['LastObservedAt']
+            triggeredEvent['CreatedAt'] = event['CreatedAt']
+            triggeredEvent['UpdatedAt'] = event['UpdatedAt']
+            triggeredEvent['Severity'] = event['Severity']
+            triggeredEvent['Title'] = event['Title']
+            triggeredEvent['Description'] = event['Description']
+            triggeredEvent['FindingId'] = event['ProductFields']['aws/securityhub/FindingId']
+
+            for item in event['Resources']:
+                if item['Type'] == "AwsEc2Instance":
+                    triggeredEvent['Resource'] = {}
+                    arn = item['Id'].split("/")
+                    triggeredEvent['Resource']['Type'] = item['Type']
+                    triggeredEvent['Resource']['Arn'] = item['Id']
+                    triggeredEvent['Resource']['Id'] = arn[1]
+                    triggeredEvent['Resource']['Partition'] = item['Partition']
+                    triggeredEvent['Resource']['Region'] = item['Region']
+                    triggeredEvent['Resource']['Details'] = item['Details']
+                    if 'Tags' in item:
+                        triggeredEvent['Resource']['Tags'] = item['Tags']
+
+                    print(triggeredEvent)
+                    invokeStep(triggeredEvent)
+
+        def invokeStep(event):
+            client = boto3.client('stepfunctions')
+
+            response = client.start_execution(
+                stateMachineArn=sfnArn,
+                name=str(time.time()) + "-" + event['Resource']['Id'],
+                input=json.dumps(event)
+            )
+
+            print(response)
+
+        def lambda_handler(event, context):
+
+            for item in event['Resources']:
+                ### Add More filters here to invoke only for certain events such as different finding Types. event['Types']
+                if item['Type'] == "AwsEc2Instance":
+                    triggeredEvent = buildEvent(event)
+                    break
+
+  ExternalPermission:
+    Type: AWS::Lambda::Permission
+    Condition: CreateExternalPermissions
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !GetAtt DiskForensicsInvoke.Arn
+      Principal: !Ref AllowInvokeFromAccountId
+
+############################################################################
+#
+# Outputs
+#
+############################################################################
+
+Outputs:
+  DiskForensicsInvokeARN:
+    Description: The ARN of the Disk Forensics invocation Lambda
+    Value: !GetAtt DiskForensicsInvoke.Arn
+    Export:
+      Name: DiskForensicsInvokeARN

@@ -1,0 +1,61 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: CloudFormation template for deploying member IR role and policy
+
+Parameters:
+  MasterAccountNum:
+    Type: String
+    Description: Master Security Account Num
+  MasterAccountRoleName:
+    Type: String
+    Default: DiskForensicAutomationRole
+    Description:
+      Base Name of the default IR Automation Master Role (region will be added).
+      Do not change this parameter. It is a reference to an IAM Role in the Security
+      account with a hardcoded name defined in the SAM template.
+
+Resources:
+  IRAutomationMemberRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${MasterAccountNum}:role/${MasterAccountRoleName}_${AWS::Region}'
+            Action: 'sts:AssumeRole'
+      Description: Role to provide access for Incident Response Automation
+      RoleName: !Sub 'IR-Automation-Member-Role_${AWS::Region}' # Hardcoded
+
+  IRAutomationMemberPolicy:
+    Type: 'AWS::IAM::ManagedPolicy'
+    Properties:
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: EC2Permissions
+            Effect: Allow
+            Action:
+              - 'ec2:CopySnapshot'
+              - 'ec2:DescribeInstances'
+              - 'ec2:CreateTags'
+              - 'ec2:DescribeSnapshots'
+              - 'ec2:ModifySnapshotAttribute'
+              - 'ec2:CreateSnapshots'
+              - 'ec2:CreateSnapshot'
+              - 'ec2:ModifyInstanceAttribute'
+              - 'ec2:TerminateInstances'
+            Resource: '*'
+          - Sid: KMSPermissions
+            Effect: Allow
+            Action:
+              - 'kms:CreateGrant'
+              - 'kms:Decrypt'
+              - 'kms:DescribeKey'
+              - 'kms:Encrypt'
+              - 'kms:GenerateDataKey*'
+              - 'kms:ReEncrypt*'
+            Resource: '*'
+      ManagedPolicyName: !Sub 'IR-Automation-Member-Policy_${AWS::Region}'
+      Roles:
+        - !Ref IRAutomationMemberRole

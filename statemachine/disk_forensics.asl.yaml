@@ -1,0 +1,223 @@
+Comment: Step Function to process AWS EC2 EBS volume snapshots for forensic analysis
+StartAt: CreateSnapshot
+States:
+    CreateSnapshot:
+        Type: Task
+        Resource: '${CreateSnapshotLambdaArn}'
+        Parameters:
+            DiskProcess.$: $
+        Next: CheckSnapshot
+        ResultPath: $
+        Catch:
+            -
+                ErrorEquals:
+                    - States.ALL
+                ResultPath: $.error-info
+                Next: ErrorAlert
+    CheckSnapshot:
+        Type: Task
+        Resource: '${CheckSnapshotLambdaArn}'
+        Parameters:
+            DiskProcess.$: $
+        Next: TerminateRogue
+        ResultPath: $
+        Retry:
+            -
+                ErrorEquals:
+                    - RuntimeError
+                IntervalSeconds: 30
+                BackoffRate: 1.5
+                MaxAttempts: 15
+        Catch:
+            -
+                ErrorEquals:
+                    - States.ALL
+                ResultPath: $.error-info
+                Next: ErrorAlert
+    ErrorAlert:
+        Type: Task
+        Resource: 'arn:aws:states:::sns:publish'
+        Parameters:
+            TopicArn: '${DiskForensicsSNSTopicArn}'
+            Message:
+                Input.$: $.error-info
+        End: true
+    TerminateRogue:
+        Type: Task
+        Resource: '${TerminateInstanceLambdaArn}'
+        Parameters:
+            InstanceARN.$: $.Resource.Arn
+            AwsAccountId.$: $.AwsAccountId
+            Region.$: $.Resource.Region
+            Terminate: '${TerminateRogueAfterInitialSnapshot}'
+        ResultPath: null
+        Retry:
+            -
+                ErrorEquals:
+                    - RuntimeError
+                IntervalSeconds: 30
+                BackoffRate: 1.5
+                MaxAttempts: 15
+        Catch:
+            -
+                ErrorEquals:
+                    - States.ALL
+                ResultPath: $.error-info
+                Next: ErrorAlert
+        Next: ProcessIncident
+    ProcessIncident:
+        Type: Parallel
+        Comment: >-
+            Parallel state will be used for future enhancements around memory
+            capture and instance isolation.
+        Branches:
+            -
+                StartAt: ProcessSnaps
+                States:
+                    ProcessSnaps:
+                        Type: Map
+                        MaxConcurrency: 0
+                        ItemsPath: $.CapturedSnapshots
+                        Iterator:
+                            StartAt: CopySnapshot
+                            States:
+                                CopySnapshot:
+                                    Type: Task
+                                    Resource: '${CopySnapshotLambdaArn}'
+                                    Parameters:
+                                        DiskProcess.$: $
+                                    Next: CheckCopySnapshot
+                                    ResultPath: $
+                                    Catch:
+                                        -
+                                            ErrorEquals:
+                                                - States.ALL
+                                            ResultPath: $.error-info
+                                            Next: MapErrorAlert
+                                CheckCopySnapshot:
+                                    Type: Task
+                                    Resource: '${CheckCopySnapshotLambdaArn}'
+                                    Parameters:
+                                        DiskProcess.$: $
+                                    Next: ShareSnapshot
+                                    ResultPath: $
+                                    Retry:
+                                        -
+                                            ErrorEquals:
+                                                - RuntimeError
+                                            IntervalSeconds: 30
+                                            BackoffRate: 1.5
+                                            MaxAttempts: 15
+                                    Catch:
+                                        -
+                                            ErrorEquals:
+                                                - States.ALL
+                                            ResultPath: $.error-info
+                                            Next: MapErrorAlert
+                                ShareSnapshot:
+                                    Type: Task
+                                    Resource: '${ShareSnapshotLambdaArn}'
+                                    Parameters:
+                                        DiskProcess.$: $
+                                    Next: FinalCopySnapshot
+                                    ResultPath: $
+                                    Catch:
+                                        -
+                                            ErrorEquals:
+                                                - States.ALL
+                                            ResultPath: $.error-info
+                                            Next: MapErrorAlert
+                                FinalCopySnapshot:
+                                    Type: Task
+                                    Resource: '${FinalCopySnapshotLambdaArn}'
+                                    Parameters:
+                                        DiskProcess.$: $
+                                    Next: FinalCheckSnapshot
+                                    ResultPath: $
+                                    Catch:
+                                        -
+                                            ErrorEquals:
+                                                - States.ALL
+                                            ResultPath: $.error-info
+                                            Next: MapErrorAlert
+                                FinalCheckSnapshot:
+                                    Type: Task
+                                    Resource: '${FinalCheckSnapshotLambdaArn}'
+                                    Parameters:
+                                        DiskProcess.$: $
+                                    Next: CreateVolume
+                                    ResultPath: $
+                                    Retry:
+                                        -
+                                            ErrorEquals:
+                                                - RuntimeError
+                                            IntervalSeconds: 30
+                                            BackoffRate: 1.5
+                                            MaxAttempts: 15
+                                    Catch:
+                                        -
+                                            ErrorEquals:
+                                                - States.ALL
+                                            ResultPath: $.error-info
+                                            Next: MapErrorAlert
+                                CreateVolume:
+                                    Type: Task
+                                    Resource: '${CreateVolumeLambdaArn}'
+                                    Parameters:
+                                        DiskProcess.$: $
+                                    Next: RunInstance
+                                    ResultPath: $
+                                    Catch:
+                                        -
+                                            ErrorEquals:
+                                                - States.ALL
+                                            ResultPath: $.error-info
+                                            Next: MapErrorAlert
+                                RunInstance:
+                                    Type: Task
+                                    Resource: '${RunInstancesLambdaArn}'
+                                    Parameters:
+                                        DiskProcess.$: $
+                                    Next: CreateInstanceWait
+                                    ResultPath: $
+                                    Catch:
+                                        -
+                                            ErrorEquals:
+                                                - States.ALL
+                                            ResultPath: $.error-info
+                                            Next: MapErrorAlert
+                                CreateInstanceWait:
+                                    Type: Wait
+                                    Seconds: 30
+                                    Next: MountForensicVolume
+                                MountForensicVolume:
+                                    Type: Task
+                                    Resource: '${MountVolumeLambdaArn}'
+                                    Parameters:
+                                        DiskProcess.$: $
+                                    End: true
+                                    ResultPath: $
+                                    Retry:
+                                        -
+                                            ErrorEquals:
+                                                - RuntimeError
+                                                - ResourceNotFoundException
+                                            IntervalSeconds: 30
+                                            BackoffRate: 1.5
+                                            MaxAttempts: 15
+                                    Catch:
+                                        -
+                                            ErrorEquals:
+                                                - States.ALL
+                                            ResultPath: $.error-info
+                                            Next: MapErrorAlert
+                                MapErrorAlert:
+                                    Type: Task
+                                    Resource: 'arn:aws:states:::sns:publish'
+                                    Parameters:
+                                        TopicArn: '${DiskForensicsSNSTopicArn}'
+                                        Message:
+                                            Input.$: $.error-info
+                                    End: true
+                        End: true
+        End: true

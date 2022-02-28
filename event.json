@@ -1,0 +1,93 @@
+{
+    "SchemaVersion": "2018-10-08",
+    "Id": "arn:aws:guardduty:us-east-1:111111111111:detector/f2b82a2b2d8d8541b8c6d2c7d9148e14/finding/b0baa737c3bf7309db2a396651fdb500",
+    "ProductArn": "arn:aws:securityhub:us-east-1::product/aws/guardduty",
+    "GeneratorId": "arn:aws:guardduty:us-east-1:111111111111:detector/f2b82a2b2d8d8541b8c6d2c7d9148e14",
+    "AwsAccountId": "111111111111",
+    "Types": [
+        "Effects/Resource Consumption/UnauthorizedAccess:EC2-TorClient"
+    ],
+    "FirstObservedAt": "2020-10-22T03:52:13.438Z",
+    "LastObservedAt": "2020-10-22T03:52:13.438Z",
+    "CreatedAt": "2020-10-22T03:52:13.438Z",
+    "UpdatedAt": "2020-10-22T03:52:13.438Z",
+    "Severity": {
+        "Product": 8,
+        "Label": "HIGH",
+        "Normalized": 60
+    },
+    "Title": "EC2 instance i-9999999999999999 is communicating with Tor Entry node.",
+    "Description": "EC2 instance i-9999999999999999 is communicating with IP address 198.51.100.0 on the Tor Anonymizing Proxy network marked as an Entry node.",
+    "SourceUrl": "https://us-east-1.console.aws.amazon.com/guardduty/home?region=us-east-1#/findings?macros=current&fId=b0baa737c3bf7309db2a396651fdb500",
+    "ProductFields": {
+        "aws/guardduty/service/action/networkConnectionAction/remotePortDetails/portName": "HTTP",
+        "aws/guardduty/service/archived": "false",
+        "aws/guardduty/service/action/networkConnectionAction/remoteIpDetails/organization/asnOrg": "GeneratedFindingASNOrg",
+        "aws/guardduty/service/action/networkConnectionAction/remoteIpDetails/Geolocation/lat": "0",
+        "aws/guardduty/service/action/networkConnectionAction/remoteIpDetails/ipAddressV4": "198.51.100.0",
+        "aws/guardduty/service/action/networkConnectionAction/remoteIpDetails/Geolocation/lon": "0",
+        "aws/guardduty/service/action/networkConnectionAction/blocked": "false",
+        "aws/guardduty/service/action/networkConnectionAction/remotePortDetails/port": "80",
+        "aws/guardduty/service/action/networkConnectionAction/remoteIpDetails/country/countryName": "GeneratedFindingCountryName",
+        "aws/guardduty/service/serviceName": "guardduty",
+        "aws/guardduty/service/action/networkConnectionAction/localIpDetails/ipAddressV4": "10.0.0.23",
+        "aws/guardduty/service/detectorId": "f2b82a2b2d8d8541b8c6d2c7d9148e14",
+        "aws/guardduty/service/action/networkConnectionAction/remoteIpDetails/organization/org": "GeneratedFindingORG",
+        "aws/guardduty/service/action/networkConnectionAction/connectionDirection": "OUTBOUND",
+        "aws/guardduty/service/eventFirstSeen": "2020-10-22T03:52:13.438Z",
+        "aws/guardduty/service/eventLastSeen": "2020-10-22T03:52:13.438Z",
+        "aws/guardduty/service/evidence/threatIntelligenceDetails.0_/threatListName": "GeneratedFindingThreatListName",
+        "aws/guardduty/service/action/networkConnectionAction/localPortDetails/portName": "Unknown",
+        "aws/guardduty/service/action/actionType": "NETWORK_CONNECTION",
+        "aws/guardduty/service/action/networkConnectionAction/remoteIpDetails/city/cityName": "GeneratedFindingCityName",
+        "aws/guardduty/service/resourceRole": "TARGET",
+        "aws/guardduty/service/action/networkConnectionAction/localPortDetails/port": "39677",
+        "aws/guardduty/service/action/networkConnectionAction/protocol": "TCP",
+        "aws/guardduty/service/count": "1",
+        "aws/guardduty/service/additionalInfo/sample": "true",
+        "aws/guardduty/service/action/networkConnectionAction/remoteIpDetails/organization/asn": "-1",
+        "aws/guardduty/service/action/networkConnectionAction/remoteIpDetails/organization/isp": "GeneratedFindingISP",
+        "aws/guardduty/service/evidence/threatIntelligenceDetails.0_/threatNames.0_": "GeneratedFindingThreatName",
+        "aws/securityhub/FindingId": "arn:aws:securityhub:us-east-1::product/aws/guardduty/arn:aws:guardduty:us-east-1:111111111111:detector/f2b82a2b2d8d8541b8c6d2c7d9148e14/finding/b0baa737c3bf7309db2a396651fdb500",
+        "aws/securityhub/ProductName": "GuardDuty",
+        "aws/securityhub/CompanyName": "Amazon"
+    },
+    "Resources": [
+        {
+            "Type": "AwsEc2Instance",
+            "Id": "arn:aws:ec2:us-east-1:111111111111:instance/i-9999999999999999",
+            "Partition": "aws",
+            "Region": "us-east-1",
+            "Tags": {
+                "GeneratedFindingInstaceTag7": "GeneratedFindingInstaceTagValue7",
+                "GeneratedFindingInstaceTag8": "GeneratedFindingInstaceTagValue8",
+                "GeneratedFindingInstaceTag9": "GeneratedFindingInstaceTagValue9",
+                "GeneratedFindingInstaceTag1": "GeneratedFindingInstaceValue1",
+                "GeneratedFindingInstaceTag2": "GeneratedFindingInstaceTagValue2",
+                "GeneratedFindingInstaceTag3": "GeneratedFindingInstaceTagValue3",
+                "GeneratedFindingInstaceTag4": "GeneratedFindingInstaceTagValue4",
+                "GeneratedFindingInstaceTag5": "GeneratedFindingInstaceTagValue5",
+                "GeneratedFindingInstaceTag6": "GeneratedFindingInstaceTagValue6"
+            },
+            "Details": {
+                "AwsEc2Instance": {
+                    "Type": "m3.xlarge",
+                    "ImageId": "ami-12345678910",
+                    "IpV4Addresses": [
+                        "10.0.0.1",
+                        "198.51.100.0"
+                    ],
+                    "IamInstanceProfileArn": "arn:aws:iam::111111111111:example/instance/profile",
+                    "VpcId": "GeneratedFindingVPCId",
+                    "SubnetId": "GeneratedFindingSubnetId",
+                    "LaunchedAt": "2016-08-02T02:05:06Z"
+                }
+            }
+        }
+    ],
+    "WorkflowState": "NEW",
+    "Workflow": {
+        "Status": "NEW"
+    },
+    "RecordState": "ACTIVE"
+}

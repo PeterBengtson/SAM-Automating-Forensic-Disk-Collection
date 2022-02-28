@@ -1,0 +1,430 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: AWS Cloudformation to deploy IR Image Builder Pipeline
+
+Parameters:
+  IAMRegion:
+    Type: String
+    Description:
+      If non-empty, the region into which to deploy global IAM resources.
+      Other regions will refer to those IAM resources using their ARNs.
+      Only leave empty for single-region installations.
+    Default: ''
+  InstanceProfileName:
+    Type: String
+    Description: The name of the IAM Instance Profile to use. There is no
+      need to change the default.
+    Default: ImageBuilderForensicInstanceProfile
+
+Conditions:
+  IAMRegionBlank: !Equals
+    - !Ref IAMRegion
+    - ''
+  IAMRegionMatches: !Equals
+    - !Ref IAMRegion
+    - !Ref 'AWS::Region'
+  CreateIAMResources: !Or
+    - !Condition IAMRegionBlank
+    - !Condition IAMRegionMatches
+
+Resources:
+  # ------ This section has been added to create a dedicated VPC for image creation ------
+
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.1.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Join ['', [!Ref 'AWS::StackName', '-VPC']]
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    DependsOn: VPC
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.1.10.0/24
+      AvailabilityZone: !Select [0, !GetAZs ]
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-Public-A
+
+  NATGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt ElasticIPAddress.AllocationId
+      SubnetId: !Ref PublicSubnetA
+      Tags:
+        - Key: Name
+          Value: !Sub NAT-${AWS::StackName}
+
+  ElasticIPAddress:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: Public
+
+  PublicRoute1:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetA
+      RouteTableId: !Ref PublicRouteTable
+
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.1.50.0/24
+      AvailabilityZone: !Select [0, !GetAZs ] # Get the first AZ in the list
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-Private-A
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: Private
+
+  PrivateRoute1:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NATGateway
+
+  PrivateSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetA
+      RouteTableId: !Ref PrivateRouteTable
+
+  ImageBuilderSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: DiskForensicsImageBuilderSG
+      GroupDescription: The SG used by the ImageBuilder
+      VpcId: !Ref VPC
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 0.0.0.0/0
+
+  # ------ End of added section ------
+
+  ImageBuilderInstanceRole:
+    Type: 'AWS::IAM::Role'
+    Condition: CreateIAMResources
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          Effect: Allow
+          Principal:
+            Service:
+              - ec2.amazonaws.com
+          Action: 'sts:AssumeRole'
+      Description: >-
+        Instance Profile to provide access for Image Builder to create base
+        image for forensic collection image
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore'
+        - 'arn:aws:iam::aws:policy/EC2InstanceProfileForImageBuilder'
+      RoleName: ImageBuilderForensicInstanceRole
+
+  ImageBuilderInstanceProfile:
+    Type: 'AWS::IAM::InstanceProfile'
+    Condition: CreateIAMResources
+    Properties:
+      InstanceProfileName: !Ref InstanceProfileName # Parametrised in two places
+      Roles:
+        - !Ref ImageBuilderInstanceRole
+
+  DiskForensicComponent:
+    Type: 'AWS::ImageBuilder::Component'
+    Properties:
+      Data: |
+        name: PrepForensicImage
+        description: This component is used to install install binaries, configure forensic scripts, and update jobs on the disk forensic image.
+        schemaVersion: 1.0
+        phases:
+          - name: build
+            steps:
+              -
+                name: InstallTools
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - sudo apt-get update
+                    - sudo apt-get upgrade
+                    - sudo apt-get install dc3dd
+                    - sudo apt-get install incron
+                    - sudo echo ubuntu >> /etc/incron.allow
+              -
+                name: CreateCollectorSript
+                action: CreateFile
+                inputs:
+                  - path: /home/ubuntu/collector.sh
+                    content: |
+                      #!/bin/bash
+                      # ensuring that the destination bucket environment variable has been set
+                      if [[ -e $1/$2 ]];
+                      then
+                      echo "[+] $(date -u) disk /dev/nvme1n1 has been mounted. Starting Collection." >> /home/ubuntu/collection.log
+                      if [[ -z $DESTINATION_BUCKET ]];
+                      then
+                      echo "[!] $(date -u) Environment variable DESTINATION_BUCKET does not exist. Exiting" >> /home/ubuntu/event.log
+                      exit 1
+                      elif [[ -z $IMAGE_NAME ]];
+                      then
+                      echo "[!] $(date -u) Environment variable IMAGE_NAME does not exist. Exiting" >> /home/ubuntu/event.log
+                      exit 1
+                      elif [[ -z $INCIDENT_ID ]];
+                      then
+                      echo "[!] $(date -u) Environment variable INCIDENT_ID does not exist. Exiting" >> /home/ubuntu/event.log
+                      exit 1
+                      else
+                      echo "[+] $(date -u) running command dc3dd if=$1/$2 hash=md5 log=/home/ubuntu/collection.log bufsz=30M verb=on | aws s3 cp - "s3://$DESTINATION_BUCKET/$INCIDENT_ID/disk_evidence/$IMAGE_NAME.image.dd"">>/home/ubuntu/collection.log
+                      # writing an image out to the destination S3 bucket
+                      SIZE=$(blockdev --getsize64 $1/$2)
+                      dc3dd if=$1/$2 hash=md5 log=/home/ubuntu/collection.log bufsz=30M verb=on 2> /home/ubuntu/cloudwatch.log | aws s3 cp --expected-size "$SIZE" - "s3://$DESTINATION_BUCKET/$INCIDENT_ID/disk_evidence/$IMAGE_NAME.image.dd"
+                      echo "[+] $(date -u) running command aws s3 cp collection.log $DESTINATION_BUCKET/$INCIDENT_ID/disk_evidence/$IMAGE_NAME.collection.log">>/home/ubuntu/collection.log
+                      # writing the dc3dd generated collection log as well as the script generated event log to the destination bucket
+                      aws s3 cp /home/ubuntu/collection.log "s3://$DESTINATION_BUCKET/$INCIDENT_ID/disk_evidence/$IMAGE_NAME.collection.log"
+                      aws s3 cp /home/ubuntu/event.log "s3://$DESTINATION_BUCKET/$INCIDENT_ID/disk_evidence/$IMAGE_NAME.event.log"
+                      # shutting down instance, which will terminate it
+                      sleep 60
+                      init 0
+                      fi
+                      fi
+
+                    owner: ubuntu
+                    group: ubuntu
+                    permissions: 0755
+              -
+                name: CreateOrchestratorScript
+                action: CreateFile
+                inputs:
+                  - path: /home/ubuntu/orchestrator.sh
+                    content: |
+                      #!/bin/bash
+                      source /etc/environment
+                      sudo flock -xn /home/ubuntu/collector.lck -c "/home/ubuntu/collector.sh $1 $2"
+                      if [[ $? == 1 ]];
+                      then
+                      echo "$(date -u) unsuccessfully executed" >> log.txt
+                      sleep 10
+                      fi
+
+                    owner: ubuntu
+                    group: ubuntu
+                    permissions: 0755
+              -
+                name: CreateIncronCheckerScript
+                action: CreateFile
+                inputs:
+                  - path: /home/ubuntu/incronChecker.sh
+                    content: |
+                      #!/bin/bash
+                      SERVICE="incron"
+                      if systemctl status "$SERVICE" >/dev/null
+                      then
+                        echo "$SERVICE is running" >> /home/ubuntu/readiness.log
+                      else
+                        echo "$SERVICE stopped" >> /home/ubuntu/readiness.log
+                      fi
+
+                    owner: ubuntu
+                    group: ubuntu
+                    permissions: 0755
+              -
+                name: CreateCloudwatchConfig
+                action: CreateFile
+                inputs:
+                  - path: /opt/aws/amazon-cloudwatch-agent/bin/cloudwatchConfig.json
+                    content: |
+                      {
+                      	"agent": {
+                      		"metrics_collection_interval": 10,
+                      		"run_as_user": "cwagent"
+                      	},
+                      	"logs": {
+                      		"logs_collected": {
+                      			"files": {
+                      				"collect_list": [
+                      					{
+                      						"file_path": "/home/ubuntu/cloudwatch.log",
+                      						"log_group_name": "ForensicDiskCapture",
+                      						"log_stream_name": "{instance_id}"
+                      					},
+                      					{
+                      						"file_path": "/home/ubuntu/readiness.log",
+                      						"log_group_name": "ForensicDiskReadiness",
+                      						"log_stream_name": "{instance_id}"
+                      					}
+                      				]
+                      			}
+                      		}
+                      	},
+                      	"metrics": {
+                      		"append_dimensions": {
+                      			"AutoScalingGroupName": "${aws:AutoScalingGroupName}",
+                      			"ImageId": "${aws:ImageId}",
+                      			"InstanceId": "${aws:InstanceId}",
+                      			"InstanceType": "${aws:InstanceType}"
+                      		},
+                      		"metrics_collected": {
+                      			"cpu": {
+                      				"measurement": [
+                      					"cpu_usage_idle",
+                      					"cpu_usage_iowait",
+                      					"cpu_usage_user",
+                      					"cpu_usage_system"
+                      				],
+                      				"metrics_collection_interval": 10,
+                      				"resources": [
+                      					"*"
+                      				],
+                      				"totalcpu": false
+                      			},
+                      			"disk": {
+                      				"measurement": [
+                      					"used_percent",
+                      					"inodes_free"
+                      				],
+                      				"metrics_collection_interval": 10,
+                      				"resources": [
+                      					"*"
+                      				]
+                      			},
+                      			"diskio": {
+                      				"measurement": [
+                      					"io_time"
+                      				],
+                      				"metrics_collection_interval": 10,
+                      				"resources": [
+                      					"*"
+                      				]
+                      			},
+                      			"mem": {
+                      				"measurement": [
+                      					"mem_used_percent"
+                      				],
+                      				"metrics_collection_interval": 10
+                      			},
+                      			"swap": {
+                      				"measurement": [
+                      					"swap_used_percent"
+                      				],
+                      				"metrics_collection_interval": 10
+                      			}
+                      		}
+                      	}
+                      }
+
+
+                    owner: root
+                    group: root
+                    permissions: 0755
+              -
+                name: ConfigureCloudWatch
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/opt/aws/amazon-cloudwatch-agent/bin/cloudwatchConfig.json -s
+              -
+                name: UpdateJobs
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - echo "*/1 * * * * /home/ubuntu/incronChecker.sh" >> newcron
+                    - crontab -u ubuntu newcron
+                    - rm newcron
+                    - echo "/dev/disk/by-path IN_CREATE /home/ubuntu/orchestrator.sh /dev nvme1n1" >> newincron
+                    - incrontab -u ubuntu newincron
+                    - rm newincron
+
+      Description: This component is used to install dc3dd and incron modules
+      Name: DiskForensicComponent
+      Platform: Linux
+      SupportedOsVersions:
+        - Ubuntu 20
+        - Ubuntu 18
+        - Ubuntu 16
+      Version: 1.0.0
+
+  DiskForensicInfrastructureConfig:
+    Type: 'AWS::ImageBuilder::InfrastructureConfiguration'
+    Properties:
+      Description: Infrastructure config used to build disk forensic AMI
+      InstanceProfileName: !Ref InstanceProfileName # Parametrised in two places
+      InstanceTypes:
+        - m5a.large
+        - m5.large # m5a.large isn't available in Stockholm
+        - t3.large
+      Name: ForensicDiskImageBuildConfig
+      TerminateInstanceOnFailure: true
+      # ----- The following two properties have been added: -----
+      SubnetId: !Ref PrivateSubnetA
+      SecurityGroupIds:
+        - !Ref ImageBuilderSecurityGroup
+      # ----- End of added properties -----
+
+  DiskForensicRecipie:
+    Type: 'AWS::ImageBuilder::ImageRecipe'
+    Properties:
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            DeleteOnTermination: true
+            VolumeSize: 20
+      Components:
+        - ComponentArn: !Sub >-
+            arn:aws:imagebuilder:${AWS::Region}:aws:component/amazon-cloudwatch-agent-linux/1.0.0/1
+        - ComponentArn: !Sub >-
+            arn:aws:imagebuilder:${AWS::Region}:aws:component/aws-cli-version-2-linux/1.0.0/1
+        - ComponentArn: !GetAtt
+            - DiskForensicComponent
+            - Arn
+      Description: Disk forensic AMI recipie
+      Name: DiskForensicRecipie
+      ParentImage: !Sub >-
+        arn:aws:imagebuilder:${AWS::Region}:aws:image/ubuntu-server-20-lts-x86/x.x.x
+      Version: 1.0.0
+      WorkingDirectory: /tmp
+
+  DiskForensicPipeline:
+    Type: 'AWS::ImageBuilder::ImagePipeline'
+    Properties:
+      Description: Disk forensic AMI build pipeline
+      EnhancedImageMetadataEnabled: true
+      ImageRecipeArn: !Ref DiskForensicRecipie
+      InfrastructureConfigurationArn: !Ref DiskForensicInfrastructureConfig
+      Name: DiskForensicPipeline
