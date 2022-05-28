@@ -59,7 +59,7 @@ sam build
 
 The `deploy-all`bash script will find your config files in the project root directory and process them in alphabetical order.
 
-NB: `diskForensicImageBuilder.yaml` must be installed in all the regions you are going to use before this step, and `diskMember` to all accounts in all used regions after this step, just as for a single-region installation.
+NB: `diskForensicImageBuilder.yaml` must be installed in all the regions you are going to use before this step, and `diskMember` to all accounts in your main region after this step, just as for a single-region installation.
 
 ## Multi-System Installation
 
@@ -81,7 +81,7 @@ or
 
 The appropriate subfolder will be selected and its TOML files processed in alphabetical order. This is actually a good structure to adopt for a single system setup as well, as it keeps the root directory uncluttered.
 
-NB: `diskForensicImageBuilder.yaml` must be installed in all regions you are going to use before this step, and `diskMember` to all accounts in all those regions after this step, just as for a single-region installation.
+NB: `diskForensicImageBuilder.yaml` must be installed in all regions you are going to use before this step, and `diskMember` to all accounts in your main region after this step, just as for a single-region installation.
 
 ## Activating the Event Rule
 
