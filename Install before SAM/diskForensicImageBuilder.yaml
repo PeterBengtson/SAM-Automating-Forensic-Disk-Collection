@@ -382,6 +382,7 @@ Resources:
 
   DiskForensicInfrastructureConfig:
     Type: 'AWS::ImageBuilder::InfrastructureConfiguration'
+    DependsOn: ImageBuilderInstanceProfile
     Properties:
       Description: Infrastructure config used to build disk forensic AMI
       InstanceProfileName: !Ref InstanceProfileName # Parametrised in two places
