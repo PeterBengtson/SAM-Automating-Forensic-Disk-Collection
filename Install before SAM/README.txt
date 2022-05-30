@@ -23,5 +23,5 @@ Do not change the default value of the InstanceProfileName parameter.
 
 After you have installed this template, you should kick off the created pipeline
 in EC2 Image Builder. The pipeline will take about 30 minutes to run. When done,
-take note of the AMI Id which you need to enter when configuring the SAM 
+take note of the AMI Id which you need to enter when configuring the SOAR 
 deployment parameters.
