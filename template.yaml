@@ -13,6 +13,10 @@ Parameters:
     Type: String
     Default: acme-inc-forensic-artifacts
     Description: Base name for the regional S3 bucket used to store forensic artifacts (region will be added)
+  ArtifactBucketExpirationInDays:
+    Type: Number
+    Default: 3650
+    Description: The number of days before artifact bucket objects expire
   ForensicsAMI:
     Type: String
     Default: ami-000000000000
@@ -268,6 +272,12 @@ Resources:
       BucketName: !Sub '${ArtifactBucketName}-${AWS::Region}'
       VersioningConfiguration:
         Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - 
+            Id: FinalExpiration
+            Status: Enabled
+            ExpirationInDays: !Ref ArtifactBucketExpirationInDays
 
   ForensicAuditLogGroup:
     Type: 'AWS::Logs::LogGroup'
