@@ -69,13 +69,13 @@ If you have more than one system or customer, you can create a `samconfig`folder
 
 This allows you to type
 
-```bash
+```console
 ./deploy-all acme
 ```
 
 or
 
-```bash
+```console
 ./deploy-all buzzcloud
 ```
 
