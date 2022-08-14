@@ -31,7 +31,7 @@ If you only will be installing in one region, all you need to do is the followin
 
 The next time you wish to deploy, all you need to do is:
 
-```bash
+```console
 sam build
 sam deploy
 ```
@@ -46,13 +46,15 @@ The config file names are not processed in any special way, but you might want t
 
 To create this setup, you basically follow the single-region setup instructions. Built as usual using `sam build`, but then add the following switch to the deployment command:
 
-`sam deploy --guided --config-file=samconfig-<something>.toml`
+```console
+sam deploy --guided --config-file=samconfig-<something>.toml
+```
 
 The `<something>` part can, again, be anything you like.
 
 Then, when you have deployed to all of your regions and generated config files for them in the process, the next time you wish to build and deploy, simply do the following:
 
-```bash
+```console
 sam build
 ./deploy-all
 ```
