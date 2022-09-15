@@ -31,7 +31,7 @@ If you only will be installing in one region, all you need to do is the followin
 
 The next time you wish to deploy, all you need to do is:
 
-```bash
+```console
 sam build
 sam deploy
 ```
@@ -46,20 +46,22 @@ The config file names are not processed in any special way, but you might want t
 
 To create this setup, you basically follow the single-region setup instructions. Built as usual using `sam build`, but then add the following switch to the deployment command:
 
-`sam deploy --guided --config-file=samconfig-<something>.toml`
+```console
+sam deploy --guided --config-file=samconfig-<something>.toml
+```
 
 The `<something>` part can, again, be anything you like.
 
 Then, when you have deployed to all of your regions and generated config files for them in the process, the next time you wish to build and deploy, simply do the following:
 
-```bash
+```console
 sam build
 ./deploy-all
 ```
 
 The `deploy-all`bash script will find your config files in the project root directory and process them in alphabetical order.
 
-NB: `diskForensicImageBuilder.yaml` must be installed in all the regions you are going to use before this step, and `diskMember` to all accounts in all used regions after this step, just as for a single-region installation.
+NB: `diskForensicImageBuilder.yaml` must be installed in all the regions you are going to use before this step, and `diskMember` to all accounts in your main region after this step, just as for a single-region installation.
 
 ## Multi-System Installation
 
@@ -69,19 +71,19 @@ If you have more than one system or customer, you can create a `samconfig`folder
 
 This allows you to type
 
-```bash
+```console
 ./deploy-all acme
 ```
 
 or
 
-```bash
+```console
 ./deploy-all buzzcloud
 ```
 
 The appropriate subfolder will be selected and its TOML files processed in alphabetical order. This is actually a good structure to adopt for a single system setup as well, as it keeps the root directory uncluttered.
 
-NB: `diskForensicImageBuilder.yaml` must be installed in all regions you are going to use before this step, and `diskMember` to all accounts in all those regions after this step, just as for a single-region installation.
+NB: `diskForensicImageBuilder.yaml` must be installed in all regions you are going to use before this step, and `diskMember` to all accounts in your main region after this step, just as for a single-region installation.
 
 ## Activating the Event Rule
 

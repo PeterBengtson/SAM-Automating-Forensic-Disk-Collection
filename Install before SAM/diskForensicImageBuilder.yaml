@@ -25,6 +25,8 @@ Conditions:
   CreateIAMResources: !Or
     - !Condition IAMRegionBlank
     - !Condition IAMRegionMatches
+  DontCreateIAMResources: !Not
+    - !Condition CreateIAMResources
 
 Resources:
   # ------ This section has been added to create a dedicated VPC for image creation ------
@@ -380,8 +382,29 @@ Resources:
         - Ubuntu 16
       Version: 1.0.0
 
-  DiskForensicInfrastructureConfig:
+  DiskForensicInfrastructureConfigMainRegion:
     Type: 'AWS::ImageBuilder::InfrastructureConfiguration'
+    Condition: CreateIAMResources
+    DependsOn: ImageBuilderInstanceProfile
+    Properties:
+      Description: Infrastructure config used to build disk forensic AMI
+      InstanceProfileName: !Ref InstanceProfileName # Parametrised in two places
+      InstanceTypes:
+        - m5a.large
+        - m5.large # m5a.large isn't available in Stockholm
+        - t3.large
+      Name: ForensicDiskImageBuildConfig
+      TerminateInstanceOnFailure: true
+      # ----- The following two properties have been added: -----
+      SubnetId: !Ref PrivateSubnetA
+      SecurityGroupIds:
+        - !Ref ImageBuilderSecurityGroup
+      # ----- End of added properties -----
+
+  DiskForensicInfrastructureConfigNotMainRegion:
+    Type: 'AWS::ImageBuilder::InfrastructureConfiguration'
+    Condition: DontCreateIAMResources
+    # No DependsOn - it's the only difference
     Properties:
       Description: Infrastructure config used to build disk forensic AMI
       InstanceProfileName: !Ref InstanceProfileName # Parametrised in two places
@@ -422,11 +445,22 @@ Resources:
       Version: 1.0.0
       WorkingDirectory: /tmp
 
-  DiskForensicPipeline:
+  DiskForensicPipelineMainRegion:
     Type: 'AWS::ImageBuilder::ImagePipeline'
+    Condition: CreateIAMResources
     Properties:
       Description: Disk forensic AMI build pipeline
       EnhancedImageMetadataEnabled: true
       ImageRecipeArn: !Ref DiskForensicRecipie
-      InfrastructureConfigurationArn: !Ref DiskForensicInfrastructureConfig
+      InfrastructureConfigurationArn: !Ref DiskForensicInfrastructureConfigMainRegion
+      Name: DiskForensicPipeline
+
+  DiskForensicPipelineNotMainRegion:
+    Type: 'AWS::ImageBuilder::ImagePipeline'
+    Condition: DontCreateIAMResources
+    Properties:
+      Description: Disk forensic AMI build pipeline
+      EnhancedImageMetadataEnabled: true
+      ImageRecipeArn: !Ref DiskForensicRecipie
+      InfrastructureConfigurationArn: !Ref DiskForensicInfrastructureConfigNotMainRegion
       Name: DiskForensicPipeline
