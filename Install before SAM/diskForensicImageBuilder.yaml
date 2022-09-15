@@ -420,7 +420,7 @@ Resources:
         - !Ref ImageBuilderSecurityGroup
       # ----- End of added properties -----
 
-  DiskForensicRecipie:
+  DiskForensicRecipe:
     Type: 'AWS::ImageBuilder::ImageRecipe'
     Properties:
       BlockDeviceMappings:
@@ -436,8 +436,8 @@ Resources:
         - ComponentArn: !GetAtt
             - DiskForensicComponent
             - Arn
-      Description: Disk forensic AMI recipie
-      Name: DiskForensicRecipie
+      Description: Disk forensic AMI recipe
+      Name: DiskForensicRecipe
       ParentImage: !Sub >-
         arn:aws:imagebuilder:${AWS::Region}:aws:image/ubuntu-server-20-lts-x86/x.x.x
       Version: 1.0.0
@@ -449,7 +449,7 @@ Resources:
     Properties:
       Description: Disk forensic AMI build pipeline
       EnhancedImageMetadataEnabled: true
-      ImageRecipeArn: !Ref DiskForensicRecipie
+      ImageRecipeArn: !Ref DiskForensicRecipe
       InfrastructureConfigurationArn: !Ref DiskForensicInfrastructureConfigMainRegion
       Name: DiskForensicPipeline
 
@@ -459,6 +459,6 @@ Resources:
     Properties:
       Description: Disk forensic AMI build pipeline
       EnhancedImageMetadataEnabled: true
-      ImageRecipeArn: !Ref DiskForensicRecipie
+      ImageRecipeArn: !Ref DiskForensicRecipe
       InfrastructureConfigurationArn: !Ref DiskForensicInfrastructureConfigNotMainRegion
       Name: DiskForensicPipeline
