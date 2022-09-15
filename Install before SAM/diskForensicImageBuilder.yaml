@@ -430,10 +430,8 @@ Resources:
             VolumeSize: 20
       Components:
         - ComponentArn: !Sub >-
-#            arn:aws:imagebuilder:${AWS::Region}:aws:component/amazon-cloudwatch-agent-linux/1.0.0/1
             arn:aws:imagebuilder:${AWS::Region}:aws:component/amazon-cloudwatch-agent-linux/x.x.x
         - ComponentArn: !Sub >-
-#            arn:aws:imagebuilder:${AWS::Region}:aws:component/aws-cli-version-2-linux/1.0.0/1
             arn:aws:imagebuilder:${AWS::Region}:aws:component/aws-cli-version-2-linux/x.x.x
         - ComponentArn: !GetAtt
             - DiskForensicComponent
